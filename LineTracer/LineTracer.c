@@ -87,7 +87,7 @@ static int16_t camera_steering_amount_calculation(void){
     LineDetectionResult result;
     getCameraResult(&result);
 
-    double  target_pos=0;
+    double  target_pos=-20;
     double val = result.layers[2].start_x;
     double dir1_x=result.layers[2].dir_x;
     double dir1_y=result.layers[2].dir_y;
@@ -97,9 +97,9 @@ static int16_t camera_steering_amount_calculation(void){
     double dir3_y=result.layers[0].dir_y;
     double out1_x,out2_x;
     double out1_y,out2_y;
-    scale_vector(dir2_x,dir2_y,0.25, &dir2_x,&dir2_y);
+    scale_vector(dir2_x,dir2_y,0.4, &dir2_x,&dir2_y);
     add_vectors(dir1_x,dir1_y,dir2_x,dir2_y,  &out1_x,&out1_y);
-    scale_vector(dir3_x,dir3_y,0.1, &dir3_x,&dir3_y);
+    scale_vector(dir3_x,dir3_y,0.2, &dir3_x,&dir3_y);
     add_vectors(out1_x,out1_y,dir3_x,dir3_y,  &out2_x,&out2_y);
 
     diff_pos = target_pos- val; 
@@ -109,7 +109,8 @@ static int16_t camera_steering_amount_calculation(void){
     double dir1_angle= -vector_to_angle_deg(out2_x,out2_y);
     printf("(%f,%f) (%f,%f)  %f , %f\n",result.layers[2].start_x,result.layers[2].start_y,result.layers[2].dir_x,result.layers[2].dir_y, diff_pos,dir1_angle);
 
-    steering_amount = (int16_t)(diff_pos * 0.08 + dir1_angle*0.57);
+//    steering_amount = (int16_t)(diff_pos * 0.086 + dir1_angle*0.5);
+    steering_amount = (int16_t)(diff_pos * 0.062 + dir1_angle*0.96);
 
     return steering_amount;
 

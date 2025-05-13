@@ -240,8 +240,8 @@ bool result_put_image(cv::Mat image) {
     clock_gettime(CLOCK_REALTIME, &sttime2);
 
     // printf("result_put_image\n");
-    int crop_width=image.cols*.75;
-    int crop_height=image.rows/2;
+    int crop_width=image.cols*1.0;
+    int crop_height=image.rows*2/3;
     int crop_x=image.cols/2-crop_width/2;
     int crop_y=image.rows-crop_height;
 
@@ -260,7 +260,7 @@ bool result_put_image(cv::Mat image) {
     cv::Point2f par2[] = {{0,result_h/deep_width},{result_w,result_h/deep_width},{result_w,0},{0,0}};
     cv::Mat pspmat = cv::getPerspectiveTransform(par1, par2);
     cv::Size size = {result_w,result_h/deep_width};
-    cv::Scalar borderValue= cv::Scalar(100,100,100);
+    cv::Scalar borderValue= cv::Scalar(128,128,128);
     cv::warpPerspective(tmp , colorimg ,pspmat,size,cv::INTER_NEAREST,cv::BORDER_CONSTANT,borderValue);
 
     //グレースケール
@@ -268,9 +268,11 @@ bool result_put_image(cv::Mat image) {
     // 最大値
     double mMin, mMax;
     cv::Point minP, maxP;
-    cv::minMaxLoc(tmp, &mMin, &mMax, &minP, &maxP);
+    cv::Rect roi(0, result_h/deep_width*3/4 , result_w, result_h/deep_width/4);
+    cv::minMaxLoc(tmp(roi), &mMin, &mMax, &minP, &maxP);
+    printf("MAX %f\n",mMax);
     // 二値化
-    cv::threshold(tmp,tmp, mMax*0.7 , 255, cv::THRESH_BINARY_INV); // 大きくすると広く拾う
+    cv::threshold(tmp,tmp, mMax*0.8 , 255, cv::THRESH_BINARY_INV); // 大きくすると広く拾う
     tmp = camera.cleanBinaryImage(tmp);
     //矩形検出
     camera.detectRotatedRectangles(tmp,colorimg,StreamCaptureRGB::EDGE_RIGHT);
@@ -311,7 +313,8 @@ void *image_sender_thread(void *arg) {
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(12345); // 任意のポート
-    inet_pton(AF_INET, "192.168.1.102", &server_addr.sin_addr); // ← PCのIPに変更
+   inet_pton(AF_INET, "192.168.254.200", &server_addr.sin_addr); // ← PCのIPに変更
+ //   inet_pton(AF_INET, "192.168.1.102", &server_addr.sin_addr); // ← PCのIPに変更
     while(true) {
         if (connect(sockfd, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
             perror("retry connection");

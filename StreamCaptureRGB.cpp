@@ -174,6 +174,7 @@ void StreamCaptureRGB::detectRotatedRectangles(const cv::Mat& binaryImage, cv::M
     CV_Assert(binaryImage.size() == outputImage.size());
 
     int maxShortSide=100;
+    int minShortSide=20;
 
     //detectedRects.clear();
     detectedRects.resize(3);  // 上・中・下
@@ -200,6 +201,7 @@ void StreamCaptureRGB::detectRotatedRectangles(const cv::Mat& binaryImage, cv::M
         cv::RotatedRect bestRect;
         bool found = false;
 
+
         for (const auto& contour : contours) {
             if (contour.empty()) continue;
             cv::RotatedRect rect = cv::minAreaRect(contour);
@@ -209,15 +211,38 @@ void StreamCaptureRGB::detectRotatedRectangles(const cv::Mat& binaryImage, cv::M
             if (shortSide > maxShortSide) {
                 continue;  // 短辺が太すぎ → 除外
             }
-            
+            if (shortSide < minShortSide) {
+                continue;  // 短辺が小さすぎ → 除外
+            }
+
             if (i < 2 && referenceShortSide > 0 &&
                 shortSide > referenceShortSide * shortSideThresholdRatio) {
                 continue;
             }
 
-            float length = std::max(rect.size.width, rect.size.height);
-            float centerDist = std::abs(rect.center.x - centerX);
-            float score = (1000.0f / (length + 1e-2)) + centerDist * 0.1f;
+            // 下段の場合、中心から画像幅の50%以内のみ許可
+            if (i == 2) {
+                float xMin = centerX - width * 0.25f;
+                float xMax = centerX + width * 0.25f;
+                if (rect.center.x < xMin || rect.center.x > xMax) continue;
+            }
+            
+            float score = 0.0f;
+
+            if (i < 2 && detectedRects[i + 1].size.width > 0 && detectedRects[i + 1].size.height > 0) {
+                float dx = rect.center.x - detectedRects[i + 1].center.x;
+                score = std::abs(dx);  // 連続性重視
+            } else if (i == 2) {
+                // 下段：画像の縦方向に対して長い矩形を優先
+                float verticalLength = std::abs(rect.size.height * std::cos(rect.angle * CV_PI / 180.0f)) +
+                                       std::abs(rect.size.width * std::sin(rect.angle * CV_PI / 180.0f));
+                float centerDist = std::abs(rect.center.x - centerX);
+                score = (1000.0f / (verticalLength + 1e-2)) + centerDist * 0.1f;
+            } else {
+                float length = std::max(rect.size.width, rect.size.height);
+                float centerDist = std::abs(rect.center.x - centerX);
+                score = (1000.0f / (length + 1e-2)) + centerDist * 0.1f;
+            }
 
             if (!found || score < bestScore) {
                 bestRect = rect;
