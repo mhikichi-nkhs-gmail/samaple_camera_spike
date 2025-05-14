@@ -29,8 +29,8 @@ public:
         EDGE_RIGHT
     };
 
-    bool initialize(int width = 3280, int height = 2464);
-    cv::Mat captureFrame();                    // 非同期的にキャプチャ（タイムアウトなしで待つ）
+    bool initialize(const std::string &device = "/dev/video0", int width = 640, int height = 480);
+    cv::Mat captureFrame(double &fpsOut);                    // 非同期的にキャプチャ（タイムアウトなしで待つ）
     bool captureFrameSync(cv::Mat &output);    // 同期キャプチャ（RTOSから呼び出しやすい）
     void shutdown();
     bool camera_get_image(cv::Mat &output);
@@ -53,6 +53,15 @@ public:
     ) ;
     cv::Mat shared_frame;
     LineDetectionResult detectedResult;
+
+    int fd_ = -1;
+    int width_, height_;
+
+    struct Buffer {
+        void* start;
+        size_t length;
+    };
+    std::vector<Buffer> buffers_;
 
 private:
     void onRequestComplete(libcamera::Request *r);

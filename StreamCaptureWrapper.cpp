@@ -151,7 +151,7 @@ bool camera_initialize(int width, int height) {
     pthread_create(&capture_thread, &tattr, [](void *) -> void * {
         sigset_t oldsig;
         disable_interrupt(&oldsig);
-        if (!camera.initialize(w,h)) 
+        if (!camera.initialize("/dev/video0",w,h)) 
             return nullptr;
         shared_buf_size = w * h * 3;
         shared_buf = new unsigned char[shared_buf_size];
@@ -313,8 +313,8 @@ void *image_sender_thread(void *arg) {
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(12345); // 任意のポート
-   inet_pton(AF_INET, "192.168.254.200", &server_addr.sin_addr); // ← PCのIPに変更
- //   inet_pton(AF_INET, "192.168.1.102", &server_addr.sin_addr); // ← PCのIPに変更
+//    inet_pton(AF_INET, "192.168.254.200", &server_addr.sin_addr); // ← PCのIPに変更
+   inet_pton(AF_INET, "192.168.1.102", &server_addr.sin_addr); // ← PCのIPに変更
     while(true) {
         if (connect(sockfd, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
             perror("retry connection");

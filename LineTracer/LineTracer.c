@@ -34,7 +34,7 @@ void LineTracer_Configure(pbio_port_id_t left_motor_port, pbio_port_id_t right_m
   pup_motor_setup(fg_left_motor,PUP_DIRECTION_COUNTERCLOCKWISE,true);
   pup_motor_setup(fg_right_motor,PUP_DIRECTION_CLOCKWISE,true);  
 
- int w=1640,h=1232;
+ int w=640,h=480;
 //  int w=640,h=480;
  int ret = camera_initialize(w,h);
     printf("camera init %d\n",ret);
@@ -52,7 +52,7 @@ void tracer_task(intptr_t unused) {
     steering_amount = camera_steering_amount_calculation();
     
     /* 走行モータ制御 */
-   motor_drive_control(steering_amount);
+  // motor_drive_control(steering_amount);
 
     /* タスク終了 */
     ext_tsk();

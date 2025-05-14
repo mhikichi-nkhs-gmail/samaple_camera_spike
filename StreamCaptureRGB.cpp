@@ -1,129 +1,155 @@
 // StreamCaptureRGB.cpp
 #include "StreamCaptureRGB.h"
 
+#include <fcntl.h>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+
+
 #include <iostream>
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/select.h>
 
-using namespace libcamera;
-
-bool StreamCaptureRGB::initialize(int width, int height) {
+bool StreamCaptureRGB::initialize(const std::string &device, int width, int height ) {
     printf("camera initialize %d,%d\n",width,height);
-    cm_ = std::make_unique<CameraManager>();
+        width_ = width;
+        height_ = height;
 
-    cm_->start();
+        fd_ = open(device.c_str(), O_RDWR);
+        if (fd_ < 0) {
+            perror("open");
+            return false;
+        }
 
-    if (cm_->cameras().empty()) {
-        std::cerr << "No camera found." << std::endl;
-        return false;
-    }
+        struct v4l2_format fmt = {};
+        fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        fmt.fmt.pix.width = width;
+        fmt.fmt.pix.height = height;
+        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+        fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
-    camera_ = cm_->cameras()[0];
-    if (camera_->acquire()) {
-        std::cerr << "Failed to acquire camera." << std::endl;
-        return false;
-    }
+        if (ioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) {
+            perror("VIDIOC_S_FMT");
+            return false;
+        }
+        // --- FPS 設定追加 ---
+        struct v4l2_streamparm parm = {};
+        parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-    config_ = camera_->generateConfiguration({ StreamRole::Viewfinder });
-    config_->at(0).pixelFormat = formats::RGB888;
-    config_->at(0).size = { width, height };
+        if (ioctl(fd_, VIDIOC_G_PARM, &parm) < 0) {
+            perror("VIDIOC_G_PARM");
+        } else {
+            parm.parm.capture.timeperframe.numerator = 1;
+            parm.parm.capture.timeperframe.denominator = 30;  // ★ ここでFPS設定
 
-    config_->validate();
-    if (camera_->configure(config_.get()) < 0) {
-        std::cerr << "Failed to configure camera." << std::endl;
-        return false;
-    }
+            if (ioctl(fd_, VIDIOC_S_PARM, &parm) < 0) {
+                perror("VIDIOC_S_PARM");
+            } else {
+                std::cout << "Requested FPS: "
+                        << parm.parm.capture.timeperframe.denominator << " / "
+                        << parm.parm.capture.timeperframe.numerator << std::endl;
+            }
+        }
 
-    std::cout << "Configured size: "
-          << config_->at(0).size.width << "x"
-          << config_->at(0).size.height << std::endl;
+        // FPS設定後に即座に確認
+        if (ioctl(fd_, VIDIOC_G_PARM, &parm) == 0) {
+            std::cout << "Actual FPS: "
+                    << parm.parm.capture.timeperframe.denominator << " / "
+                    << parm.parm.capture.timeperframe.numerator << std::endl;
+        }
 
+        struct v4l2_requestbuffers req = {};
+        req.count = 4;
+        req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        req.memory = V4L2_MEMORY_MMAP;
 
-    stream_ = config_->at(0).stream();
-    allocator_ = std::make_unique<FrameBufferAllocator>(camera_);
-    allocator_->allocate(stream_);
+        if (ioctl(fd_, VIDIOC_REQBUFS, &req) < 0) {
+            perror("VIDIOC_REQBUFS");
+            return false;
+        }
 
-    camera_->requestCompleted.connect(this, &StreamCaptureRGB::onRequestComplete);
-    if (camera_->start() < 0) {
-        std::cerr << "Failed to start camera." << std::endl;
-        return false;
-    }
+        buffers_.resize(req.count);
+        for (size_t i = 0; i < req.count; ++i) {
+            struct v4l2_buffer buf = {};
+            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buf.memory = V4L2_MEMORY_MMAP;
+            buf.index = i;
 
+            if (ioctl(fd_, VIDIOC_QUERYBUF, &buf) < 0) {
+                perror("VIDIOC_QUERYBUF");
+                return false;
+            }
 
+            buffers_[i].length = buf.length;
+            buffers_[i].start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, buf.m.offset);
+            if (buffers_[i].start == MAP_FAILED) {
+                perror("mmap");
+                return false;
+            }
 
-    printf("init fin\n");
+            if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
+                perror("VIDIOC_QBUF");
+                return false;
+            }
+        }
 
-    return true;
+        v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (ioctl(fd_, VIDIOC_STREAMON, &type) < 0) {
+            perror("VIDIOC_STREAMON");
+            return false;
+        }
+
+        return true;
 }
 
-cv::Mat StreamCaptureRGB::captureFrame() {
+cv::Mat StreamCaptureRGB::captureFrame(double &fpsOut) {
 
-    std::lock_guard<std::mutex> captureLock(captureMutex_);
+        static auto lastTime = std::chrono::steady_clock::now();
 
-    FrameBuffer *buffer = allocator_->buffers(stream_)[bufferIndex_++ % allocator_->buffers(stream_).size()].get();
-    std::unique_ptr<Request> request = camera_->createRequest();
+        struct v4l2_buffer buf = {};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
 
+        if (ioctl(fd_, VIDIOC_DQBUF, &buf) < 0) {
+            perror("VIDIOC_DQBUF");
+            return {};
+        }
 
-    ControlList controls(camera_->controls());
-    std::int64_t frameDuration = 33333; // 30fps
-    std::array<std::int64_t, 2> durationLimits = { frameDuration, frameDuration };
-    controls.set(libcamera::controls::FrameDurationLimits,
-                 libcamera::Span<const std::int64_t, 2>(durationLimits));
-    request->controls() = controls;
+        uchar* data = static_cast<uchar*>(buffers_[buf.index].start);
+        std::vector<uchar> jpeg_data(data, data + buf.bytesused);
+        cv::Mat img= cv::imdecode(jpeg_data, cv::IMREAD_COLOR);
 
-    request->addBuffer(stream_, buffer);
-    {
-        std::lock_guard<std::mutex> lock2(mutex_);
-        done_ = false;
-    }
-    camera_->queueRequest(request.release());
+        if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
+            perror("VIDIOC_QBUF");
+        }
 
-    std::unique_lock<std::mutex> lock2(mutex_);
-    cv_.wait(lock2, [&] { return done_; });
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTime).count();
+        lastTime = now;
+        fpsOut = elapsed > 0.0 ? 1000.0 / elapsed : 0.0;
 
-//printf("captureFrame return \n");
-    return lastFrame_.clone();
+        return img;
 }
 
 bool StreamCaptureRGB::captureFrameSync(cv::Mat &output) {
-    cv::Mat frame = captureFrame();
+    double fpsOut;
+    cv::Mat frame = captureFrame(fpsOut);
     if (frame.empty()) return false;
     output = frame.clone();
     return true;
 }
 
 void StreamCaptureRGB::shutdown() {
-    if (camera_) {
-        camera_->stop();
-        camera_->requestCompleted.disconnect(this, &StreamCaptureRGB::onRequestComplete);
-        allocator_.reset();
-        camera_->release();
-    }
-    if (cm_) cm_->stop();
-}
+    v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    ioctl(fd_, VIDIOC_STREAMOFF, &type);
 
-void StreamCaptureRGB::onRequestComplete(Request *r) {
-   // printf("onRequestComplete\n");
-    const FrameBuffer::Plane &plane = r->buffers().begin()->second->planes()[0];
-    void *mem = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
-    int stride = plane.length / config_->at(0).size.height;
-    if (mem == MAP_FAILED) {
-        std::cerr << "mmap failed\n";
-        return;
+    for (auto &buf : buffers_) {
+        munmap(buf.start, buf.length);
     }
 
-    const StreamConfiguration &cfg = config_->at(0);
-    lastFrame_ = cv::Mat(cfg.size.height, cfg.size.width, CV_8UC3, mem,stride).clone();
-    munmap(mem, plane.length);
-
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        done_ = true;
-    }
-    cv_.notify_one();
-  //  printf("onRequestComplete finish\n");
+    if (fd_ >= 0) close(fd_);
 }
 
 // cropとresizeを同時に行う
